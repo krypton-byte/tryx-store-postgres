@@ -1,7 +1,36 @@
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "tryx-store-postgres"
 version = "0.1.0"
-description = "Add your description here"
+description = "PostgreSQL backend for the Tryx framework (native FFI)"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
+license = "MIT"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Database",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/krypton-byte/tryx-store-postgres"
+Repository = "https://github.com/krypton-byte/tryx-store-postgres"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tryx_store_postgres = ["libs/*.so"]

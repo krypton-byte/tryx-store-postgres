@@ -1,0 +1,303 @@
+name: Build & Package
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+  # Rust nightly — required for unsafe(no_mangle) syntax
+  RUST_TOOLCHAIN: nightly
+
+# ────────────────────────────────────────────────────────────────────
+# Cancel in-progress runs on the same branch/PR
+# ────────────────────────────────────────────────────────────────────
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ══════════════════════════════════════════════════════════════════
+  # Job 1: Build native libraries (parallel matrix)
+  # ══════════════════════════════════════════════════════════════════
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux musl targets (cargo-zigbuild) ──────────────────
+          - target: x86_64-unknown-linux-musl
+            label: linux-x86_64-musl
+            os_family: linux
+            arch: x86_64
+            variant: musl
+            backend: zigbuild
+
+          - target: aarch64-unknown-linux-musl
+            label: linux-aarch64-musl
+            os_family: linux
+            arch: aarch64
+            variant: musl
+            backend: zigbuild
+
+          - target: armv7-unknown-linux-musleabihf
+            label: linux-armv7l-musleabihf
+            os_family: linux
+            arch: armv7l
+            variant: musleabihf
+            backend: zigbuild
+
+          - target: i686-unknown-linux-musl
+            label: linux-i686-musl
+            os_family: linux
+            arch: i686
+            variant: musl
+            backend: zigbuild
+
+          - target: s390x-unknown-linux-musl
+            label: linux-s390x-musl
+            os_family: linux
+            arch: s390x
+            variant: musl
+            backend: zigbuild
+
+          - target: powerpc64le-unknown-linux-musl
+            label: linux-ppc64le-musl
+            os_family: linux
+            arch: ppc64le
+            variant: musl
+            backend: zigbuild
+
+          # ── Android targets (cargo-ndk) ──────────────────────────
+          - target: aarch64-linux-android
+            label: android-aarch64
+            os_family: android
+            arch: aarch64
+            variant: ""
+            backend: ndk
+
+          - target: armv7-linux-androideabi
+            label: android-armv7l
+            os_family: android
+            arch: armv7l
+            variant: ""
+            backend: ndk
+
+          - target: x86_64-linux-android
+            label: android-x86_64
+            os_family: android
+            arch: x86_64
+            variant: ""
+            backend: ndk
+
+          - target: i686-linux-android
+            label: android-i686
+            os_family: android
+            arch: i686
+            variant: ""
+            backend: ndk
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Rust toolchain ───────────────────────────────────────────
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+
+      # ── sccache (shared compilation cache) ───────────────────────
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      # ── Cargo caches ─────────────────────────────────────────────
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-${{ hashFiles('tryx-postgres-rs/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-
+
+      - name: Cache cargo bin (installed tools)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/
+          key: cargo-bin-${{ matrix.backend }}-v1
+          restore-keys: |
+            cargo-bin-${{ matrix.backend }}-
+
+      # ══════════════════════════════════════════════════════════════
+      # Backend: cargo-zigbuild (Linux musl)
+      # ══════════════════════════════════════════════════════════════
+      - name: Install Zig
+        if: matrix.backend == 'zigbuild'
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        if: matrix.backend == 'zigbuild'
+        run: |
+          which cargo-zigbuild 2>/dev/null || cargo install cargo-zigbuild --locked
+
+      - name: Cache Zig global
+        if: matrix.backend == 'zigbuild'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/zig
+          key: zig-cache-0.13.0-${{ matrix.target }}
+          restore-keys: |
+            zig-cache-0.13.0-
+
+      - name: Build (zigbuild)
+        if: matrix.backend == 'zigbuild'
+        working-directory: tryx-postgres-rs
+        run: |
+          cargo zigbuild --release --target ${{ matrix.target }}
+
+      # ══════════════════════════════════════════════════════════════
+      # Backend: cargo-ndk (Android)
+      # ══════════════════════════════════════════════════════════════
+      - name: Setup Android NDK
+        if: matrix.backend == 'ndk'
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          link-to-sdk: true
+
+      - name: Install cargo-ndk
+        if: matrix.backend == 'ndk'
+        run: |
+          which cargo-ndk 2>/dev/null || cargo install cargo-ndk --locked
+
+      - name: Build (cargo-ndk)
+        if: matrix.backend == 'ndk'
+        working-directory: tryx-postgres-rs
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cargo ndk \
+            --target ${{ matrix.target }} \
+            --platform 24 \
+            build --release
+
+      # ══════════════════════════════════════════════════════════════
+      # Collect & upload artifact
+      # ══════════════════════════════════════════════════════════════
+      - name: Rename and stage library
+        run: |
+          set -euo pipefail
+
+          SRC="tryx-postgres-rs/target/${{ matrix.target }}/release/libtryx_postgres.so"
+
+          # Build descriptive filename
+          VARIANT="${{ matrix.variant }}"
+          if [ -n "$VARIANT" ]; then
+            LIBNAME="libtryx_postgres-${{ matrix.os_family }}-${{ matrix.arch }}-${VARIANT}.so"
+          else
+            LIBNAME="libtryx_postgres-${{ matrix.os_family }}-${{ matrix.arch }}.so"
+          fi
+
+          mkdir -p staging
+          cp "$SRC" "staging/${LIBNAME}"
+
+          # Report
+          SIZE=$(du -h "staging/${LIBNAME}" | cut -f1)
+          echo "LIBNAME=${LIBNAME}" >> "$GITHUB_ENV"
+          echo "### ✅ Built \`${LIBNAME}\` (${SIZE})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lib-${{ matrix.label }}
+          path: staging/
+          retention-days: 7
+          if-no-files-found: error
+
+  # ══════════════════════════════════════════════════════════════════
+  # Job 2: Package Python wheels (per platform)
+  # ══════════════════════════════════════════════════════════════════
+  package:
+    name: Package wheels
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packaging tools
+        run: pip install build wheel setuptools
+
+      - name: Download all library artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: lib-*
+
+      - name: List downloaded artifacts
+        run: |
+          echo "### 📦 Downloaded Libraries" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          find artifacts/ -type f -name "*.so" | sort | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build platform wheels
+        run: python scripts/build_wheels.py
+
+      - name: List generated wheels
+        run: |
+          echo "### 🎡 Generated Wheels" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -lh dist/*.whl 2>/dev/null | tee -a "$GITHUB_STEP_SUMMARY" || echo "No wheels found"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels
+          path: dist/*.whl
+          retention-days: 30
+          if-no-files-found: error
+
+  # ══════════════════════════════════════════════════════════════════
+  # Job 3: Publish to PyPI (only on tag push)
+  # ══════════════════════════════════════════════════════════════════
+  publish:
+    name: Publish to PyPI
+    needs: package
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      id-token: write  # for trusted publishing
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: python-wheels
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
