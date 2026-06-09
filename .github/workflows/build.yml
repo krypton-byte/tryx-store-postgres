@@ -288,6 +288,7 @@ jobs:
     needs: package
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    environment: PYPI
     permissions:
       id-token: write  # for trusted publishing
     steps:
@@ -300,4 +301,6 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          repository-url: https://test.pypi.org/legacy/
           packages-dir: dist/
+          verbose: true
