@@ -13,8 +13,8 @@ env:
   RUST_BACKTRACE: 1
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
-  # Rust nightly — required for unsafe(no_mangle) syntax
-  RUST_TOOLCHAIN: nightly
+  # Rust stable is sufficient for this crate.
+  RUST_TOOLCHAIN: stable
 
 # ────────────────────────────────────────────────────────────────────
 # Cancel in-progress runs on the same branch/PR
@@ -24,9 +24,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ══════════════════════════════════════════════════════════════════
-  # Job 1: Build native libraries (parallel matrix)
-  # ══════════════════════════════════════════════════════════════════
   build:
     name: Build ${{ matrix.label }}
     runs-on: ubuntu-latest
@@ -34,84 +31,47 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ── Linux musl targets (cargo-zigbuild) ──────────────────
-          - target: x86_64-unknown-linux-musl
-            label: linux-x86_64-musl
+          - label: linux-x86_64-glibc
+            backend: native
+            target: x86_64-unknown-linux-gnu
             os_family: linux
             arch: x86_64
-            variant: musl
-            backend: zigbuild
+            variant: glibc
 
-          - target: aarch64-unknown-linux-musl
-            label: linux-aarch64-musl
-            os_family: linux
-            arch: aarch64
-            variant: musl
-            backend: zigbuild
-
-          - target: armv7-unknown-linux-musleabihf
-            label: linux-armv7l-musleabihf
-            os_family: linux
-            arch: armv7l
-            variant: musleabihf
-            backend: zigbuild
-
-          - target: i686-unknown-linux-musl
-            label: linux-i686-musl
-            os_family: linux
-            arch: i686
-            variant: musl
-            backend: zigbuild
-
-          - target: s390x-unknown-linux-musl
-            label: linux-s390x-musl
-            os_family: linux
-            arch: s390x
-            variant: musl
-            backend: zigbuild
-
-          - target: powerpc64le-unknown-linux-musl
-            label: linux-ppc64le-musl
-            os_family: linux
-            arch: ppc64le
-            variant: musl
-            backend: zigbuild
-
-          # ── Android targets (cargo-ndk) ──────────────────────────
-          - target: aarch64-linux-android
-            label: android-aarch64
+          - label: android-aarch64
+            backend: ndk
+            target: aarch64-linux-android
             os_family: android
             arch: aarch64
             variant: ""
-            backend: ndk
 
-          - target: armv7-linux-androideabi
-            label: android-armv7l
+          - label: android-armv7l
+            backend: ndk
+            target: armv7-linux-androideabi
             os_family: android
             arch: armv7l
             variant: ""
-            backend: ndk
 
-          - target: x86_64-linux-android
-            label: android-x86_64
+          - label: android-x86_64
+            backend: ndk
+            target: x86_64-linux-android
             os_family: android
             arch: x86_64
             variant: ""
-            backend: ndk
 
-          - target: i686-linux-android
-            label: android-i686
+          - label: android-i686
+            backend: ndk
+            target: i686-linux-android
             os_family: android
             arch: i686
             variant: ""
-            backend: ndk
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       # ── Rust toolchain ───────────────────────────────────────────
-      - name: Install Rust nightly
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -137,42 +97,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/
-          key: cargo-bin-${{ matrix.backend }}-v1
+          key: cargo-bin-ndk-v1
           restore-keys: |
-            cargo-bin-${{ matrix.backend }}-
+            cargo-bin-ndk-
 
-      # ══════════════════════════════════════════════════════════════
-      # Backend: cargo-zigbuild (Linux musl)
-      # ══════════════════════════════════════════════════════════════
-      - name: Install Zig
-        if: matrix.backend == 'zigbuild'
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.13.0
-
-      - name: Install cargo-zigbuild
-        if: matrix.backend == 'zigbuild'
-        run: |
-          which cargo-zigbuild 2>/dev/null || cargo install cargo-zigbuild --locked
-
-      - name: Cache Zig global
-        if: matrix.backend == 'zigbuild'
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/zig
-          key: zig-cache-0.13.0-${{ matrix.target }}
-          restore-keys: |
-            zig-cache-0.13.0-
-
-      - name: Build (zigbuild)
-        if: matrix.backend == 'zigbuild'
+      - name: Build (native glibc)
+        if: matrix.backend == 'native'
         working-directory: tryx-postgres-rs
         run: |
-          cargo zigbuild --release --target ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }}
 
-      # ══════════════════════════════════════════════════════════════
-      # Backend: cargo-ndk (Android)
-      # ══════════════════════════════════════════════════════════════
       - name: Setup Android NDK
         if: matrix.backend == 'ndk'
         uses: nttld/setup-ndk@v1
@@ -186,7 +120,7 @@ jobs:
         run: |
           which cargo-ndk 2>/dev/null || cargo install cargo-ndk --locked
 
-      - name: Build (cargo-ndk)
+      - name: Build (Android)
         if: matrix.backend == 'ndk'
         working-directory: tryx-postgres-rs
         env:
@@ -197,19 +131,18 @@ jobs:
             --platform 24 \
             build --release
 
-      # ══════════════════════════════════════════════════════════════
-      # Collect & upload artifact
-      # ══════════════════════════════════════════════════════════════
-      - name: Rename and stage library
+      - name: Stage library
         run: |
           set -euo pipefail
 
-          SRC="tryx-postgres-rs/target/${{ matrix.target }}/release/libtryx_postgres.so"
+          if [ "${{ matrix.backend }}" = "native" ]; then
+            SRC="tryx-postgres-rs/target/${{ matrix.target }}/release/libtryx_postgres.so"
+          else
+            SRC="tryx-postgres-rs/target/${{ matrix.target }}/release/libtryx_postgres.so"
+          fi
 
-          # Build descriptive filename
-          VARIANT="${{ matrix.variant }}"
-          if [ -n "$VARIANT" ]; then
-            LIBNAME="libtryx_postgres-${{ matrix.os_family }}-${{ matrix.arch }}-${VARIANT}.so"
+          if [ -n "${{ matrix.variant }}" ]; then
+            LIBNAME="libtryx_postgres-${{ matrix.os_family }}-${{ matrix.arch }}-${{ matrix.variant }}.so"
           else
             LIBNAME="libtryx_postgres-${{ matrix.os_family }}-${{ matrix.arch }}.so"
           fi
@@ -217,9 +150,7 @@ jobs:
           mkdir -p staging
           cp "$SRC" "staging/${LIBNAME}"
 
-          # Report
           SIZE=$(du -h "staging/${LIBNAME}" | cut -f1)
-          echo "LIBNAME=${LIBNAME}" >> "$GITHUB_ENV"
           echo "### ✅ Built \`${LIBNAME}\` (${SIZE})" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload library artifact

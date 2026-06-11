@@ -4,7 +4,7 @@
 //! backend (Postgres, Mongo, etc.) can implement. Karat loads this `.so`
 //! at runtime via `libloading`.
 
-mod pg;
+pub mod pg;
 
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;

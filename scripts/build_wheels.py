@@ -38,6 +38,8 @@ SRC_DIR = PROJECT_ROOT / "src"
 # ── Platform mapping ──────────────────────────────────────────────
 # Maps (os_family, arch, variant) → Python platform tag
 PLATFORM_MAP: dict[tuple[str, str, str], str] = {
+    # Linux glibc
+    ("linux", "x86_64", "glibc"):      "manylinux_2_34_x86_64",
     # Linux musl
     ("linux", "x86_64",  "musl"):        "musllinux_1_2_x86_64",
     ("linux", "aarch64", "musl"):        "musllinux_1_2_aarch64",

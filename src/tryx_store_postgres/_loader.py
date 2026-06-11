@@ -5,7 +5,7 @@ Automatically detects the current OS, architecture, and C library variant
 to load the correct pre-compiled ``libtryx_postgres`` shared library.
 
 Supported platforms:
-    - Linux musl: x86_64, aarch64, armv7l, i686, s390x, ppc64le
+    - Linux glibc: x86_64
     - Android:    aarch64, armv7l, x86_64, i686
 """
 
@@ -99,14 +99,12 @@ def detect_platform() -> tuple[str, str, str]:
 
     if sys.platform.startswith("linux"):
         if _is_musl():
-            # armv7l with hard float
-            variant = "musleabihf" if arch == "armv7l" else "musl"
-            return ("linux", arch, variant)
-        else:
-            # glibc — try musl library anyway (statically linked musl .so
-            # should work on glibc systems too)
-            variant = "musleabihf" if arch == "armv7l" else "musl"
-            return ("linux", arch, variant)
+            raise RuntimeError("Linux musl is not supported by this build")
+
+        if arch != "x86_64":
+            raise RuntimeError(f"Unsupported Linux architecture for glibc build: {arch}")
+
+        return ("linux", arch, "glibc")
 
     raise RuntimeError(
         f"Unsupported platform: {sys.platform} ({machine}). "
@@ -136,7 +134,7 @@ def get_library_path(
     arch : str, optional
         Override architecture detection.
     variant : str, optional
-        Override variant detection ("musl", "musleabihf", or "").
+        Override variant detection ("glibc" or "").
 
     Returns
     -------
